@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  maven-build:
+    name: Maven build (Java ${{ matrix.java-version }}) [${{ matrix.expander_leg
+      }}]
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - java-version: 25
+          os: macos-latest
+          arch: arm64
+          runner: macos-latest
+          expander_leg: macos-latest-25-arm64
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+
+    - name: Set up JDK ${{ matrix.java-version }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: ${{ matrix.java-version }}
+        cache: maven
+
+    - name: Add JDK 25 annotation processor profile
+      if: matrix.java-version == '25'
+      shell: bash
+      run: |
+        PYTHON_BIN="$(command -v python3 || command -v python)"
+        "$PYTHON_BIN" - <<'PY'
+        from pathlib import Path
+
+        pom = Path('pom.xml')
+        content = pom.read_text()
+        profile = '''\
+                <profile>
+                    <id>jdk25-annotation-processor</id>
+                    <activation>
+                        <jdk>[25,)</jdk>
+                    </activation>
+                    <build>
+                        <plugins>
+                            <plugin>
+                                <groupId>org.apache.maven.plugins</groupId>
+                                <artifactId>maven-compiler-plugin</artifactId>
+                                <configuration>
+                                    <annotationProcessorPaths>
+                                        <path>
+                                            <groupId>org.projectlombok</groupId>
+                                            <artifactId>lombok</artifactId>
+                                        </path>
+                                    </annotationProcessorPaths>
+                                </configuration>
+                            </plugin>
+                        </plugins>
+                    </build>
+                </profile>
+        '''
+
+        marker = '    </profiles>'
+        if marker not in content:
+            raise SystemExit('Cannot find root pom.xml profiles section.')
+        if 'jdk25-annotation-processor' not in content:
+            content = content.replace(marker, profile + marker, 1)
+            pom.write_text(content)
+        PY
+
+    - name: Build with Maven
+      run: mvn -B -ntp clean install
+    timeout-minutes: 150
